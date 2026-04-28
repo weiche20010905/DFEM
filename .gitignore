@@ -1,0 +1,23 @@
+# datasets (downloaded by torchvision)
+data/
+
+# model checkpoints (large binaries, regenerate via train scripts)
+checkpoints/
+
+# training logs
+*.log
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ipynb_checkpoints/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# temp / smoke-test artifacts
+checkpoints/_smoke*.pth
