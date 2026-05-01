@@ -11,6 +11,7 @@ Pipeline:
     over `num_directions` random Gaussian directions (no teacher backprop needed).
 """
 import argparse
+import gc
 import os
 import time
 
@@ -112,7 +113,7 @@ def main():
     parser.add_argument('--lr-g', type=float, default=1e-4)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--weight-decay', type=float, default=5e-4)
-    parser.add_argument('--num-workers', type=int, default=4)
+    parser.add_argument('--num-workers', type=int, default=0, help='set to 0 to avoid DataLoader deadlock with long-running DataParallel')
     parser.add_argument('--gpus', default='0', help='comma-separated GPU ids, e.g. "0,1,2,3"')
     parser.add_argument('--log-every', type=int, default=100)
     args = parser.parse_args()
@@ -137,7 +138,7 @@ def main():
         G = nn.DataParallel(G, device_ids=device_ids)
         print(f'Using DataParallel across GPUs {device_ids}')
 
-    test_loader = get_cifar_test_loader(args.data_root, 512, args.num_workers)
+    test_loader = get_cifar_test_loader(args.data_root, 512, num_workers=2)
     teacher_acc = evaluate(teacher, test_loader, device)
     print(f'Teacher CIFAR10 test acc: {teacher_acc*100:.2f}%')
 
@@ -191,9 +192,13 @@ def main():
             if (it + 1) % args.log_every == 0:
                 print(f'  ep{epoch+1} iter {it+1}/{args.iters_per_epoch} | '
                       f'g_loss {running_g_loss/max(running_g_n,1):.4f} | '
-                      f's_loss {running_s_loss/max(running_s_n,1):.4f}')
+                      f's_loss {running_s_loss/max(running_s_n,1):.4f}',
+                      flush=True)
+                torch.cuda.empty_cache()
 
         sched_S.step(); sched_G.step()
+        gc.collect()
+        torch.cuda.empty_cache()
 
         s_acc = evaluate(student, test_loader, device)
         agree = agreement(student, teacher, test_loader, device)
@@ -203,6 +208,16 @@ def main():
               f'g_loss {running_g_loss/max(running_g_n,1):.4f} '
               f's_loss {running_s_loss/max(running_s_n,1):.4f} | '
               f'student_cifar_acc {s_acc*100:.2f} agreement {agree*100:.2f} | {elapsed:.1f}s')
+
+        latest_student = args.student_ckpt.replace('.pth', '_latest.pth')
+        latest_generator = args.generator_ckpt.replace('.pth', '_latest.pth')
+        torch.save({'model_state_dict': unwrap(student).state_dict(),
+                    'cifar_test_acc': s_acc,
+                    'agreement': agree,
+                    'epoch': epoch + 1}, latest_student)
+        torch.save({'model_state_dict': unwrap(G).state_dict(),
+                    'nz': args.nz,
+                    'epoch': epoch + 1}, latest_generator)
 
         if agree > best_agree:
             best_agree = agree
